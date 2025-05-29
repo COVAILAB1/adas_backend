@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 // MongoDB connection
-mongoose.connect('mongodb://localhost:27017/driver_assist', {
+mongoose.connect('mongodb+srv://covailabs1:dpBIwF4ZZcJQkgjA@cluster0.jr1ju8f.mongodb.net/driver_assist?retryWrites=true&w=majority&appName=Cluster0', {
     useNewUrlParser: true,
     useUnifiedTopology: true
 }).then(() => {
