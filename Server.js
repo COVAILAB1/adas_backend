@@ -49,7 +49,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, default: 'user' },
   full_name: { type: String, required: true },
   email: { type: String, required: true },
-   score: { type: Number, default: 100, min: 0 },
+   score: { type: Number, default: 100, min: 0,max:100 },
   car_name: { type: String, required: true },
   car_number: { type: String, required: true },
   obd_name: { type: String, required: true },
