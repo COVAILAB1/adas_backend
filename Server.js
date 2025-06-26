@@ -251,7 +251,6 @@ app.post('/api/location', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
 // Insert event data with driver performance calculation
 app.post('/api/log_event', async (req, res) => {
   try {
@@ -294,22 +293,32 @@ app.post('/api/log_event', async (req, res) => {
         scoreChange = 2; // Reward for safe driving behavior
         break;
       default:
-        scoreChange = 2; // No change for other events
+        scoreChange = 0; // No change for other events (changed from 2 to 0)
     }
 
-    // Update user score
+    // Update user score with bounds checking
     if (scoreChange !== 0) {
       const user = await User.findById(user_id);
       if (user) {
-        const newScore = Math.max(0, user.score + scoreChange); // Ensure score doesn't go below 0
+        // Calculate new score with bounds checking (0-100)
+        const currentScore = user.score || 50; // Default to 50 if no score exists
+        const newScore = Math.max(0, Math.min(100, currentScore + scoreChange));
+        
         user.score = newScore;
         await user.save();
+        
+        logger.info(`User ${user_id} score updated: ${currentScore} -> ${newScore} (change: ${scoreChange})`);
       } else {
         logger.warn(`User not found for score update: ${user_id}`);
       }
     }
 
-    res.status(200).json({ success: true, message: 'Event logged' });
+    res.status(200).json({ 
+      success: true, 
+      message: 'Event logged',
+      event_id: event._id,
+      score_change: scoreChange
+    });
   } catch (error) {
     logger.error('Error logging event:', error);
     res.status(500).json({ success: false, error: 'Server error' });
