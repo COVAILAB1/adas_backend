@@ -3,7 +3,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 const winston = require('winston');
 const bodyParser = require('body-parser');
 
@@ -29,22 +28,16 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(helmet());
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
-app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
 
 // MongoDB connection
 mongoose.connect('mongodb+srv://covailabs1:dpBIwF4ZZcJQkgjA@cluster0.jr1ju8f.mongodb.net/driver_assist?retryWrites=true&w=majority&appName=Cluster0', {
   useNewUrlParser: true,
   useUnifiedTopology: true
 }).then(() => {
-  logger.info('Connected to MongoDB');
+  console.log('Connected to MongoDB');
 }).catch(err => {
   logger.error('MongoDB connection error:', err);
 });
@@ -104,7 +97,6 @@ const Event = mongoose.model('Event', eventSchema);
 app.get('/api/get_users', async (req, res) => {
   try {
     const users = await User.find({}, 'id username full_name email score car_name car_number obd_name bluetooth_mac');
-    logger.info(`Fetched ${users.length} users`);
     res.json({ success: true, users });
   } catch (error) {
     logger.error('Error fetching users:', error);
@@ -126,7 +118,6 @@ app.post('/api/login', async (req, res) => {
       logger.warn(`Invalid login attempt for username: ${username}`);
     res.json({ success: false, error: 'Invalid credentials' });    }
 
-    logger.info(`User logged in: ${username}`);
     res.json({ 
       success: true, 
       user: { 
@@ -179,7 +170,6 @@ app.post('/api/add_user', async (req, res) => {
     });
 
     await user.save();
-    logger.info(`User added: ${username}`);
     res.status(200).json({ success: true, message: 'User added successfully' });
   } catch (error) {
     logger.error('Error adding user:', error);
@@ -228,7 +218,6 @@ app.put('/api/update_user', async (req, res) => {
     user.bluetooth_mac = bluetooth_mac;
 
     await user.save();
-    logger.info(`User updated: ${username}`);
     res.status(200).json({ success: true, message: 'User updated successfully' });
   } catch (error) {
     logger.error('Error updating user:', error);
@@ -256,7 +245,6 @@ app.post('/api/location', async (req, res) => {
     });
 
     await location.save();
-    logger.info(`Location data saved for user ${user_id}`);
     res.status(200).json({ success: true, message: 'Location data saved' });
   } catch (error) {
     logger.error('Error saving location data:', error);
@@ -316,13 +304,11 @@ app.post('/api/log_event', async (req, res) => {
         const newScore = Math.max(0, user.score + scoreChange); // Ensure score doesn't go below 0
         user.score = newScore;
         await user.save();
-        logger.info(`Updated score for user ${user_id}: ${newScore} (Change: ${scoreChange})`);
       } else {
         logger.warn(`User not found for score update: ${user_id}`);
       }
     }
 
-    logger.info(`Event ${event_type} logged for user ${user_id}`);
     res.status(200).json({ success: true, message: 'Event logged' });
   } catch (error) {
     logger.error('Error logging event:', error);
@@ -364,7 +350,6 @@ app.get('/api/get_user_details',  async (req, res) => {
       Event.find(query).lean()
     ]);
 
-    logger.info(`Fetched details for user ${user_id} on ${date || 'all time'}`);
     res.json({
       success: true,
       user: {
@@ -384,7 +369,6 @@ app.get('/api/get_user_details',  async (req, res) => {
 app.get('/api/admin/locations',  async (req, res) => {
   try {
     const locations = await Location.find().populate('user_id', 'full_name car_name car_number');
-    logger.info(`Admin fetched ${locations.length} location records`);
     res.json({ success: true, locations });
   } catch (error) {
     logger.error('Error fetching locations for admin:', error);
@@ -396,7 +380,6 @@ app.get('/api/admin/locations',  async (req, res) => {
 app.get('/api/admin/events', async (req, res) => {
   try {
     const events = await Event.find().populate('user_id', 'full_name car_name car_number');
-    logger.info(`Admin fetched ${events.length} event records`);
     res.json({ success: true, events });
   } catch (error) {
     logger.error('Error fetching events for admin:', error);
