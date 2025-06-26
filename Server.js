@@ -40,7 +40,7 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // MongoDB connection
-mongoose.connect('mongodb://localhost:27017/driver_assist', {
+mongoose.connect('mongodb+srv://covailabs1:dpBIwF4ZZcJQkgjA@cluster0.jr1ju8f.mongodb.net/driver_assist?retryWrites=true&w=majority&appName=Cluster0', {
   useNewUrlParser: true,
   useUnifiedTopology: true
 }).then(() => {
@@ -124,8 +124,7 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ username, password });
     if (!user) {
       logger.warn(`Invalid login attempt for username: ${username}`);
-      return res.status(401).json({ success: false, error: 'Invalid credentials' });
-    }
+    res.json({ success: false, error: 'Invalid credentials' });    }
 
     logger.info(`User logged in: ${username}`);
     res.json({ 
