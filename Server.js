@@ -87,8 +87,8 @@ const eventSchema = new mongoose.Schema({
 // New speed schema for separate collection
 const speedSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  speed_obd: { type: Number, required: true, default: 0 },
-  speed_gps: { type: Number, required: true, default: 0 },
+   speed_obd: { type: Number, required: false, default: 0 }, // Made optional with default
+  speed_gps: { type: Number, required: false, default: 0 },
   latitude: { type: Number, required: true },
   longitude: { type: Number, required: true },
   timestamp: { type: Date, required: true, default: Date.now }
@@ -261,8 +261,8 @@ app.post('/api/location', async (req, res) => {
   }
 });
 
-// NEW: Insert speed data endpoint
-app.post('/api/speed', async (req, res) => {
+// POST /api/speed endpoint
+router.post('/api/speed', async (req, res) => {
   try {
     const { user_id, speed_data } = req.body;
 
@@ -274,21 +274,23 @@ app.post('/api/speed', async (req, res) => {
 
     // Process each speed data entry
     const speedEntries = speed_data.map(data => {
-      const { latitude, longitude, speed, speed_source, timestamp } = data;
+      const { latitude, longitude, speed, speed_obd, speed_gps, speed_source, timestamp } = data;
 
-      // Validate individual entry
+      // Validate required fields
       if (latitude == null || longitude == null || speed == null || !speed_source) {
         throw new Error('Missing required fields in speed data entry');
       }
 
-      // Map speed to speed_obd or speed_gps based on speed_source
+      // Map speed data, using provided values or defaults
       const speedEntry = {
         user_id,
-        speed_obd: speed_source === 'OBD' ? speed : null,
-        speed_gps: speed_source === 'GPS' ? speed : null,
+        speed, // Primary speed value
+        speed_obd: speed_obd != null ? speed_obd : (speed_source === 'OBD' ? speed : 0),
+        speed_gps: speed_gps != null ? speed_gps : (speed_source === 'GPS' ? speed : 0),
         latitude,
         longitude,
-        timestamp: timestamp ? new Date(timestamp) : new Date()
+        timestamp: timestamp ? new Date(timestamp) : new Date(),
+        speed_source
       };
 
       return speedEntry;
@@ -304,7 +306,7 @@ app.post('/api/speed', async (req, res) => {
     });
   } catch (error) {
     logger.error('Error saving speed data:', error);
-    res.status(500).json({ success: false, error: 'Server error' });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
