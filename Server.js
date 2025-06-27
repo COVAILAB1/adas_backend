@@ -6,7 +6,6 @@ const morgan = require('morgan');
 const winston = require('winston');
 const bodyParser = require('body-parser');
 
-
 const app = express();
 
 // Logger configuration
@@ -49,7 +48,7 @@ const userSchema = new mongoose.Schema({
   role: { type: String, default: 'user' },
   full_name: { type: String, required: true },
   email: { type: String, required: true },
-   score: { type: Number, default: 100, min: 0,max:100 },
+  score: { type: Number, default: 100, min: 0, max: 100 },
   car_name: { type: String, required: true },
   car_number: { type: String, required: true },
   obd_name: { type: String, required: true },
@@ -75,24 +74,33 @@ const locationSchema = new mongoose.Schema({
   timestamp: { type: Date, required: true }
 });
 
+// Updated event schema - removed speed fields
 const eventSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   event_type: { type: String, required: true },
   event_description: { type: String, required: true },
   timestamp: { type: Date, required: true },
-  speed_obd: { type: Number, default: 0 },
-  speed_gps: { type: Number, default: 0 },
   latitude: { type: Number, default: 0 },
   longitude: { type: Number, default: 0 }
+});
+
+// New speed schema for separate collection
+const speedSchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  speed_obd: { type: Number, required: true, default: 0 },
+  speed_gps: { type: Number, required: true, default: 0 },
+  latitude: { type: Number, required: true },
+  longitude: { type: Number, required: true },
+  timestamp: { type: Date, required: true, default: Date.now }
 });
 
 // Models
 const User = mongoose.model('User', userSchema);
 const Location = mongoose.model('Location', locationSchema);
 const Event = mongoose.model('Event', eventSchema);
+const Speed = mongoose.model('Speed', speedSchema);
 
 // Authentication middleware for admin routes
-
 
 app.get('/api/get_users', async (req, res) => {
   try {
@@ -116,7 +124,8 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ username, password });
     if (!user) {
       logger.warn(`Invalid login attempt for username: ${username}`);
-    res.json({ success: false, error: 'Invalid credentials' });    }
+      return res.status(400).json({ success: false, error: 'Invalid credentials' });
+    }
 
     res.json({ 
       success: true, 
@@ -251,10 +260,58 @@ app.post('/api/location', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-// Insert event data with driver performance calculation
+
+// NEW: Insert speed data endpoint
+app.post('/api/speed', async (req, res) => {
+  try {
+    const { user_id, speed_data } = req.body;
+
+    // Validate request body
+    if (!user_id || !speed_data || !Array.isArray(speed_data) || speed_data.length === 0) {
+      logger.warn('Invalid speed data received');
+      return res.status(400).json({ success: false, error: 'Missing or invalid required fields' });
+    }
+
+    // Process each speed data entry
+    const speedEntries = speed_data.map(data => {
+      const { latitude, longitude, speed, speed_source, timestamp } = data;
+
+      // Validate individual entry
+      if (latitude == null || longitude == null || speed == null || !speed_source) {
+        throw new Error('Missing required fields in speed data entry');
+      }
+
+      // Map speed to speed_obd or speed_gps based on speed_source
+      const speedEntry = {
+        user_id,
+        speed_obd: speed_source === 'OBD' ? speed : null,
+        speed_gps: speed_source === 'GPS' ? speed : null,
+        latitude,
+        longitude,
+        timestamp: timestamp ? new Date(timestamp) : new Date()
+      };
+
+      return speedEntry;
+    });
+
+    // Insert all valid entries into the database
+    const savedSpeeds = await Speed.insertMany(speedEntries);
+
+    res.status(200).json({
+      success: true,
+      message: 'Speed data saved',
+      speed_ids: savedSpeeds.map(speed => speed._id)
+    });
+  } catch (error) {
+    logger.error('Error saving speed data:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// Updated event logging - removed speed fields
 app.post('/api/log_event', async (req, res) => {
   try {
-    const { user_id, event_type, event_description, timestamp, speed_obd, speed_gps, latitude, longitude } = req.body;
+    const { user_id, event_type, event_description, timestamp, latitude, longitude } = req.body;
 
     if (!user_id || !event_type || !event_description || !timestamp) {
       logger.warn('Invalid event data received');
@@ -266,8 +323,6 @@ app.post('/api/log_event', async (req, res) => {
       event_type,
       event_description,
       timestamp: new Date(timestamp),
-      speed_obd: speed_obd || 0,
-      speed_gps: speed_gps || 0,
       latitude: latitude || 0,
       longitude: longitude || 0
     });
@@ -293,7 +348,7 @@ app.post('/api/log_event', async (req, res) => {
         scoreChange = 2; // Reward for safe driving behavior
         break;
       default:
-        scoreChange = 0; // No change for other events (changed from 2 to 0)
+        scoreChange = 0; // No change for other events
     }
 
     // Update user score with bounds checking
@@ -325,8 +380,8 @@ app.post('/api/log_event', async (req, res) => {
   }
 });
 
-// Get user details with date filtering
-app.get('/api/get_user_details',  async (req, res) => {
+// Updated get user details with speed data
+app.get('/api/get_user_details', async (req, res) => {
   try {
     const { user_id, date } = req.query;
     console.log(req.query);
@@ -354,18 +409,57 @@ app.get('/api/get_user_details',  async (req, res) => {
       };
     }
 
-    const [locations, event_logs] = await Promise.all([
+    const [locations, event_logs, speed_data] = await Promise.all([
       Location.find(query).lean(),
-      Event.find(query).lean()
+      Event.find(query).lean(),
+      Speed.find(query).lean()
     ]);
+
+    // Map speed data to traveled_path points
+    const locationsWithSpeed = locations.map(location => {
+      const traveled_path = location.traveled_path.map(point => {
+        // Find matching speed data by coordinates and timestamp proximity
+        const matchedSpeed = speed_data.find(speed => {
+          const speedTime = new Date(speed.timestamp);
+          const pointTime = new Date(location.timestamp || speedTime); // Fallback to speed timestamp
+          const timeDiff = Math.abs(speedTime - pointTime);
+          return (
+            Math.abs(speed.latitude - point.latitude) < 0.0001 &&
+            Math.abs(speed.longitude - point.longitude) < 0.0001 &&
+            timeDiff < 1000 * 60 // Within 1 minute
+          );
+        });
+
+        // Use speed_obd if available, otherwise speed_gps, default to 0 if no match
+        const speedValue = matchedSpeed
+          ? matchedSpeed.speed_obd != null
+            ? matchedSpeed.speed_obd
+            : matchedSpeed.speed_gps != null
+              ? matchedSpeed.speed_gps
+              : 0
+          : 0;
+
+        return {
+          ...point,
+          speed: speedValue
+        };
+      });
+
+      return {
+        ...location,
+        traveled_path
+      };
+    });
 
     res.json({
       success: true,
       user: {
         ...user.toObject(),
         id: user._id,
-        locations,
-        event_logs
+        locations: locationsWithSpeed,
+        event_logs,
+        // Optionally include speed_data for debugging or other uses
+        speed_data
       }
     });
   } catch (error) {
@@ -375,7 +469,7 @@ app.get('/api/get_user_details',  async (req, res) => {
 });
 
 // Admin route: Get all location data
-app.get('/api/admin/locations',  async (req, res) => {
+app.get('/api/admin/locations', async (req, res) => {
   try {
     const locations = await Location.find().populate('user_id', 'full_name car_name car_number');
     res.json({ success: true, locations });
@@ -392,6 +486,17 @@ app.get('/api/admin/events', async (req, res) => {
     res.json({ success: true, events });
   } catch (error) {
     logger.error('Error fetching events for admin:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+// NEW: Admin route: Get all speed data
+app.get('/api/admin/speeds', async (req, res) => {
+  try {
+    const speeds = await Speed.find().populate('user_id', 'full_name car_name car_number');
+    res.json({ success: true, speeds });
+  } catch (error) {
+    logger.error('Error fetching speeds for admin:', error);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
