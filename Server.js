@@ -262,7 +262,7 @@ app.post('/api/location', async (req, res) => {
 });
 
 // POST /api/speed endpoint
-router.post('/api/speed', async (req, res) => {
+app.post('/api/speed', async (req, res) => {
   try {
     const { user_id, speed_data } = req.body;
 
