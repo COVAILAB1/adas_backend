@@ -379,8 +379,7 @@ app.post('/api/log_event', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
-// Updated get user details with speed data
+// Updated get user details with separate speed and location data
 app.get('/api/get_user_details', async (req, res) => {
   try {
     const { user_id, date } = req.query;
@@ -415,51 +414,14 @@ app.get('/api/get_user_details', async (req, res) => {
       Speed.find(query).lean()
     ]);
 
-    // Map speed data to traveled_path points
-    const locationsWithSpeed = locations.map(location => {
-      const traveled_path = location.traveled_path.map(point => {
-        // Find matching speed data by coordinates and timestamp proximity
-        const matchedSpeed = speed_data.find(speed => {
-          const speedTime = new Date(speed.timestamp);
-          const pointTime = new Date(location.timestamp || speedTime); // Fallback to speed timestamp
-          const timeDiff = Math.abs(speedTime - pointTime);
-          return (
-            Math.abs(speed.latitude - point.latitude) < 0.0001 &&
-            Math.abs(speed.longitude - point.longitude) < 0.0001 &&
-            timeDiff < 1000 * 60 // Within 1 minute
-          );
-        });
-
-        // Use speed_obd if available, otherwise speed_gps, default to 0 if no match
-        const speedValue = matchedSpeed
-          ? matchedSpeed.speed_obd != null
-            ? matchedSpeed.speed_obd
-            : matchedSpeed.speed_gps != null
-              ? matchedSpeed.speed_gps
-              : 0
-          : 0;
-
-        return {
-          ...point,
-          speed: speedValue
-        };
-      });
-
-      return {
-        ...location,
-        traveled_path
-      };
-    });
-
     res.json({
       success: true,
       user: {
         ...user.toObject(),
         id: user._id,
-        locations: locationsWithSpeed,
-        event_logs,
-        // Optionally include speed_data for debugging or other uses
-        speed_data
+        locations: locations,        // Original location data without speed merging
+        event_logs: event_logs,
+        speed_data: speed_data       // Separate speed data collection
       }
     });
   } catch (error) {
@@ -467,7 +429,6 @@ app.get('/api/get_user_details', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
 // Admin route: Get all location data
 app.get('/api/admin/locations', async (req, res) => {
   try {
