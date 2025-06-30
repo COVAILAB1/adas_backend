@@ -124,7 +124,7 @@ app.post('/api/login', async (req, res) => {
     const user = await User.findOne({ username, password });
     if (!user) {
       logger.warn(`Invalid login attempt for username: ${username}`);
-      return res.status(400).json({ success: false, error: 'Invalid credentials' });
+      return res.json({ success: false, error: 'Invalid credentials' })
     }
 
     res.json({ 
@@ -383,7 +383,8 @@ app.post('/api/log_event', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-// Updated get user details with separate speed and location data
+
+// Updated get user details without speed data
 app.get('/api/get_user_details', async (req, res) => {
   try {
     const { user_id, date } = req.query;
@@ -412,10 +413,9 @@ app.get('/api/get_user_details', async (req, res) => {
       };
     }
 
-    const [locations, event_logs, speed_data] = await Promise.all([
+    const [locations, event_logs] = await Promise.all([
       Location.find(query).lean(),
-      Event.find(query).lean(),
-      Speed.find(query).lean()
+      Event.find(query).lean()
     ]);
 
     res.json({
@@ -423,9 +423,8 @@ app.get('/api/get_user_details', async (req, res) => {
       user: {
         ...user.toObject(),
         id: user._id,
-        locations: locations,        // Original location data without speed merging
-        event_logs: event_logs,
-        speed_data: speed_data       // Separate speed data collection
+        locations: locations,
+        event_logs: event_logs
       }
     });
   } catch (error) {
@@ -433,35 +432,44 @@ app.get('/api/get_user_details', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-// Admin route: Get all location data
-app.get('/api/admin/locations', async (req, res) => {
-  try {
-    const locations = await Location.find().populate('user_id', 'full_name car_name car_number');
-    res.json({ success: true, locations });
-  } catch (error) {
-    logger.error('Error fetching locations for admin:', error);
-    res.status(500).json({ success: false, error: 'Server error' });
-  }
-});
 
-// Admin route: Get all event data
-app.get('/api/admin/events', async (req, res) => {
+// New API to get speed data
+app.get('/api/get_speed_data', async (req, res) => {
   try {
-    const events = await Event.find().populate('user_id', 'full_name car_name car_number');
-    res.json({ success: true, events });
-  } catch (error) {
-    logger.error('Error fetching events for admin:', error);
-    res.status(500).json({ success: false, error: 'Server error' });
-  }
-});
+    const { user_id, date } = req.query;
+    console.log(req.query);
 
-// NEW: Admin route: Get all speed data
-app.get('/api/admin/speeds', async (req, res) => {
-  try {
-    const speeds = await Speed.find().populate('user_id', 'full_name car_name car_number');
-    res.json({ success: true, speeds });
+    if (!user_id) {
+      logger.warn('Missing user_id in get_speed_data');
+      return res.status(400).json({ success: false, error: 'Missing user_id' });
+    }
+
+    const user = await User.findById(user_id);
+    if (!user) {
+      logger.warn(`User not found: ${user_id}`);
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    let query = { user_id };
+    if (date) {
+      const startOfDay = new Date(date);
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setDate(startOfDay.getDate() + 1);
+
+      query.timestamp = {
+        $gte: startOfDay,
+        $lt: endOfDay
+      };
+    }
+
+    const speed_data = await Speed.find(query).lean();
+
+    res.json({
+      success: true,
+      speed_data: speed_data
+    });
   } catch (error) {
-    logger.error('Error fetching speeds for admin:', error);
+    logger.error('Error fetching speed data:', error);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
