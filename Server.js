@@ -101,6 +101,8 @@ const Event = mongoose.model('Event', eventSchema);
 const Speed = mongoose.model('Speed', speedSchema);
 
 // Authentication middleware for admin routes
+11.0171035
+76.9644485
 
 app.get('/api/get_users', async (req, res) => {
   try {
@@ -286,7 +288,6 @@ app.post('/api/speed', async (req, res) => {
       // Map speed data, using provided values or defaults
       const speedEntry = {
         user_id,
-        speed, // Primary speed value
         speed_obd: speed_obd != null ? speed_obd : (speed_source === 'OBD' ? speed : 0),
         speed_gps: speed_gps != null ? speed_gps : (speed_source === 'GPS' ? speed : 0),
         latitude,
