@@ -259,12 +259,14 @@ app.post('/api/location', async (req, res) => {
     logger.error('Error saving location data:', error);
     res.status(500).json({ success: false, error: 'Server error' });
   }
+
 });
 
 // POST /api/speed endpoint
 app.post('/api/speed', async (req, res) => {
   try {
     const { user_id, speed_data } = req.body;
+    console.log(req.body);
 
     // Validate request body
     if (!user_id || !speed_data || !Array.isArray(speed_data) || speed_data.length === 0) {
