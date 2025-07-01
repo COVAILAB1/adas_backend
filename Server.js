@@ -457,7 +457,6 @@ app.post('/api/log_event', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
 app.get('/api/get_user_details', async (req, res) => {
   try {
     const { user_id, date, trip_id } = req.query;
@@ -493,12 +492,12 @@ app.get('/api/get_user_details', async (req, res) => {
             _id: '$trip_id',
             user_id: { $first: '$user_id' },
             start_location: { $first: '$start_location' },
-            end_location: { $first: '$end_location' },
-            traveled_path: { $first: '$traveled_path' },
+            end_location: { $last: '$end_location' }, // Use $last for end_location to get the latest
+            traveled_path: { $push: '$traveled_path' }, // Collect all traveled_path arrays
             start_time: { $first: '$start_time' },
             stop_time: { $last: '$stop_time' },
             timestamp: { $first: '$timestamp' },
-            total_distance: { $first: '$total_distance' },
+            total_distance: { $sum: '$total_distance' }, // Sum total_distance if multiple documents
             total_drive_time: {
               $max: {
                 $cond: [
@@ -510,11 +509,26 @@ app.get('/api/get_user_details', async (req, res) => {
             }
           }
         },
+        {
+          $addFields: {
+            traveled_path: {
+              $reduce: {
+                input: '$traveled_path',
+                initialValue: [],
+                in: { $concatArrays: ['$$value', '$$this'] } // Flatten nested arrays
+              }
+            }
+          }
+        },
         { $sort: { timestamp: -1 } }
       ]),
       Event.find(query).lean(),
-      // Count distinct trips for the date
-      date ? Location.distinct('trip_id', { user_id, timestamp: { $gte: new Date(date), $lt: new Date(new Date(date).setDate(new Date(date).getDate() + 1)) } }).then(trips => trips.length) : Promise.resolve(0)
+      date
+        ? Location.distinct('trip_id', {
+            user_id,
+            timestamp: { $gte: new Date(date), $lt: new Date(new Date(date).setDate(new Date(date).getDate() + 1)) },
+          }).then(trips => trips.length)
+        : Promise.resolve(0),
     ]);
 
     // Format locations with total_drive_time in seconds
@@ -523,15 +537,17 @@ app.get('/api/get_user_details', async (req, res) => {
       user_id: loc.user_id,
       start_location: loc.start_location,
       end_location: loc.end_location,
-      traveled_path: loc.traveled_path,
+      traveled_path: loc.traveled_path || [], // Ensure traveled_path is always an array
       start_time: loc.start_time,
       stop_time: loc.stop_time,
       timestamp: loc.timestamp,
       total_distance: loc.total_distance,
-      total_drive_time: loc.total_drive_time ? Math.floor(loc.total_drive_time / 1000) : null
+      total_drive_time: loc.total_drive_time ? Math.floor(loc.total_drive_time / 1000) : null,
     }));
 
-    logger.info(`[${new Date().toISOString()}] Fetched ${formattedLocations.length} trips, ${event_logs.length} events, and ${trip_count} distinct trips for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`);
+    logger.info(
+      `[${new Date().toISOString()}] Fetched ${formattedLocations.length} trips, ${event_logs.length} events, and ${trip_count} distinct trips for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`
+    );
     res.json({
       success: true,
       user: {
@@ -539,8 +555,8 @@ app.get('/api/get_user_details', async (req, res) => {
         id: user._id,
         locations: formattedLocations,
         event_logs,
-        trip_count // Include the number of distinct trips for the date
-      }
+        trip_count,
+      },
     });
   } catch (error) {
     logger.error(`[${new Date().toISOString()}] Error fetching user details: ${error.message}`);
