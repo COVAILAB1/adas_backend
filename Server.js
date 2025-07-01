@@ -102,10 +102,6 @@ const Location = mongoose.model('Location', locationSchema);
 const Event = mongoose.model('Event', eventSchema);
 const Speed = mongoose.model('Speed', speedSchema);
 
-// Authentication middleware for admin routes
-11.0171035
-76.9644485
-
 app.get('/api/get_users', async (req, res) => {
   try {
     const users = await User.find({}, 'id username full_name email score car_name car_number obd_name bluetooth_mac');
@@ -285,8 +281,11 @@ app.post('/api/location', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-app.delete('api/delete_user/:userId',async (req, res) => {
+
+app.delete('/api/delete_user/:userId', async (req, res) => {
   const { userId } = req.params;
+  console.log('Delete request params:', req.params);
+  console.log('UserId to delete:', userId);
 
   // Validate userId
   if (!userId) {
@@ -296,13 +295,23 @@ app.delete('api/delete_user/:userId',async (req, res) => {
     });
   }
 
+  // Validate if userId is a valid MongoDB ObjectId
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid userId format',
+    });
+  }
+
   // Start a MongoDB transaction
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // Delete user from 'users' collection
-    const userDeleteResult = await User.deleteOne({ userId }, { session });
+    // 🔥 FIX: Use _id field instead of userId field
+    const userDeleteResult = await User.deleteOne({ _id: userId }, { session });
+    console.log('User delete result:', userDeleteResult);
+    
     if (userDeleteResult.deletedCount === 0) {
       await session.abortTransaction();
       session.endSession();
@@ -313,9 +322,18 @@ app.delete('api/delete_user/:userId',async (req, res) => {
     }
 
     // Delete related data from other collections
-    await Location.deleteMany({ userId }, { session });
-    await EventLog.deleteMany({ userId }, { session });
-    await SpeedData.deleteMany({ userId }, { session });
+    // 🔥 FIX: Use the correct field name for related data
+    // If your other collections store userId as a string field, keep userId
+    // If they store it as ObjectId reference, use _id
+    const locationDeleteResult = await Location.deleteMany({ userId }, { session });
+    const eventLogDeleteResult = await Event.deleteMany({ user_id: userId }, { session });
+    const speedDataDeleteResult = await Speed.deleteMany({ userId }, { session });
+
+    console.log('Related data deletion results:', {
+      locations: locationDeleteResult.deletedCount,
+      eventLogs: eventLogDeleteResult.deletedCount,
+      speedData: speedDataDeleteResult.deletedCount
+    });
 
     // Commit the transaction
     await session.commitTransaction();
@@ -324,6 +342,12 @@ app.delete('api/delete_user/:userId',async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `All data for user ${userId} deleted successfully`,
+      deletedCounts: {
+        user: userDeleteResult.deletedCount,
+        locations: locationDeleteResult.deletedCount,
+        eventLogs: eventLogDeleteResult.deletedCount,
+        speedData: speedDataDeleteResult.deletedCount
+      }
     });
   } catch (error) {
     // Roll back transaction on error
@@ -334,9 +358,11 @@ app.delete('api/delete_user/:userId',async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Server error while deleting user data',
+      details: error.message
     });
   }
 });
+
 // POST /api/speed endpoint
 app.post('/api/speed', async (req, res) => {
   try {
@@ -457,10 +483,108 @@ app.post('/api/log_event', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-app.get('/api/get_user_details', async (req, res) => {
+
+app.get('/api/get_trips_data', async (req, res) => {
   try {
     const { user_id, date, trip_id } = req.query;
-    logger.info(`[${new Date().toISOString()}] Fetching user details for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`);
+    console.log('Get trips data query:', req.query);
+
+    if (!user_id || !date) {
+      logger.warn('Missing user_id or date in get_trips_data');
+      return res.status(400).json({ success: false, error: 'Missing user_id or date' });
+    }
+
+    // Verify user exists
+    const user = await User.findById(user_id);
+    if (!user) {
+      logger.warn(`User not found: ${user_id}`);
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Create date range for the selected date
+    const startOfDay = new Date(date);
+    const endOfDay = new Date(startOfDay);
+    endOfDay.setDate(startOfDay.getDate() + 1);
+
+    const dateQuery = {
+      user_id,
+      timestamp: {
+        $gte: startOfDay,
+        $lt: endOfDay
+      }
+    };
+
+    // If trip_id is provided, return specific trip data
+    if (trip_id) {
+      const tripQuery = { user_id, trip_id };
+      
+      const [locationData, eventData] = await Promise.all([
+        Location.findOne(tripQuery).lean(),
+        Event.find(tripQuery).lean()
+      ]);
+
+      if (!locationData) {
+        return res.status(404).json({ success: false, error: 'Trip not found' });
+      }
+
+      return res.json({
+        success: true,
+        trip_data: {
+          trip_id: locationData.trip_id,
+          start_location: locationData.start_location,
+          end_location: locationData.end_location,
+          traveled_path: locationData.traveled_path,
+          start_time: locationData.start_time,
+          stop_time: locationData.stop_time,
+          total_distance: locationData.total_distance,
+          events: eventData
+        }
+      });
+    }
+
+    // If no trip_id provided, return all trips for the date
+    const [allTripsLocation, allTripsEvents] = await Promise.all([
+      Location.find(dateQuery).lean(),
+      Event.find(dateQuery).lean()
+    ]);
+
+    // Group events by trip_id
+    const eventsByTrip = allTripsEvents.reduce((acc, event) => {
+      if (!acc[event.trip_id]) {
+        acc[event.trip_id] = [];
+      }
+      acc[event.trip_id].push(event);
+      return acc;
+    }, {});
+
+    // Format trips data
+    const tripsData = allTripsLocation.map(location => ({
+      trip_id: location.trip_id,
+      start_location: location.start_location,
+      end_location: location.end_location,
+      traveled_path: location.traveled_path,
+      start_time: location.start_time,
+      stop_time: location.stop_time,
+      total_distance: location.total_distance,
+      events: eventsByTrip[location.trip_id] || []
+    }));
+
+    res.json({
+      success: true,
+      total_trips: tripsData.length,
+      trips_data: tripsData
+    });
+
+  } catch (error) {
+    logger.error('Error fetching trips data:', error);
+    res.status(500).json({ success: false, error: 'Server error' });
+  }
+});
+
+app.get('/api/get_user_details', async (req, res) => {
+  try {
+    const { user_id } = req.query;
+    console.log(req.query);
 
     if (!user_id) {
       logger.warn('Missing user_id in get_user_details');
@@ -473,94 +597,23 @@ app.get('/api/get_user_details', async (req, res) => {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
-    let query = { user_id };
-    if (date) {
-      const startOfDay = new Date(date);
-      const endOfDay = new Date(startOfDay);
-      endOfDay.setDate(startOfDay.getDate() + 1);
-      query.timestamp = { $gte: startOfDay, $lt: endOfDay };
-    }
-    if (trip_id) {
-      query.trip_id = trip_id;
-    }
-
-    const [locations, event_logs, trip_count] = await Promise.all([
-      Location.aggregate([
-        { $match: query },
-        {
-          $group: {
-            _id: '$trip_id',
-            user_id: { $first: '$user_id' },
-            start_location: { $first: '$start_location' },
-            end_location: { $last: '$end_location' }, // Use $last for end_location to get the latest
-            traveled_path: { $push: '$traveled_path' }, // Collect all traveled_path arrays
-            start_time: { $first: '$start_time' },
-            stop_time: { $last: '$stop_time' },
-            timestamp: { $first: '$timestamp' },
-            total_distance: { $sum: '$total_distance' }, // Sum total_distance if multiple documents
-            total_drive_time: {
-              $max: {
-                $cond: [
-                  { $and: [{ $ne: ['$start_time', null] }, { $ne: ['$stop_time', null] }] },
-                  { $subtract: ['$stop_time', '$start_time'] },
-                  null
-                ]
-              }
-            }
-          }
-        },
-        {
-          $addFields: {
-            traveled_path: {
-              $reduce: {
-                input: '$traveled_path',
-                initialValue: [],
-                in: { $concatArrays: ['$$value', '$$this'] } // Flatten nested arrays
-              }
-            }
-          }
-        },
-        { $sort: { timestamp: -1 } }
-      ]),
-      Event.find(query).lean(),
-      date
-        ? Location.distinct('trip_id', {
-            user_id,
-            timestamp: { $gte: new Date(date), $lt: new Date(new Date(date).setDate(new Date(date).getDate() + 1)) },
-          }).then(trips => trips.length)
-        : Promise.resolve(0),
-    ]);
-console.log(locations);
-    // Format locations with total_drive_time in seconds
-    const formattedLocations = locations.map(loc => ({
-      trip_id: loc._id,
-      user_id: loc.user_id,
-      start_location: loc.start_location,
-      end_location: loc.end_location,
-      traveled_path: loc.traveled_path || [], // Ensure traveled_path is always an array
-      start_time: loc.start_time,
-      stop_time: loc.stop_time,
-      timestamp: loc.timestamp,
-      total_distance: loc.total_distance,
-      total_drive_time: loc.total_drive_time ? Math.floor(loc.total_drive_time / 1000) : null,
-    }));
-    console.log(formattedLocations);
-
-    logger.info(
-      `[${new Date().toISOString()}] Fetched ${formattedLocations.length} trips, ${event_logs.length} events, and ${trip_count} distinct trips for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`
-    );
+    // Return only user profile information
     res.json({
       success: true,
       user: {
-        ...user.toObject(),
         id: user._id,
-        locations: formattedLocations,
-        event_logs,
-        trip_count,
-      },
+        username: user.username,
+        full_name: user.full_name,
+        email: user.email,
+        score: user.score,
+        car_name: user.car_name,
+        car_number: user.car_number,
+        obd_name: user.obd_name,
+        bluetooth_mac: user.bluetooth_mac
+      }
     });
   } catch (error) {
-    logger.error(`[${new Date().toISOString()}] Error fetching user details: ${error.message}`);
+    logger.error('Error fetching user details:', error);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
