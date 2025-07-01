@@ -530,7 +530,7 @@ app.get('/api/get_user_details', async (req, res) => {
           }).then(trips => trips.length)
         : Promise.resolve(0),
     ]);
-
+console.log(locations);
     // Format locations with total_drive_time in seconds
     const formattedLocations = locations.map(loc => ({
       trip_id: loc._id,
