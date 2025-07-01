@@ -389,8 +389,8 @@ app.post('/api/speed', async (req, res) => {
       // Map speed data, using provided values or defaults
       const speedEntry = {
         user_id,
-        speed_obd: speed_obd != null ? speed_obd : (speed_source === 'OBD' ? speed : 0),
-        speed_gps: speed_gps != null ? speed_gps : (speed_source === 'GPS' ? speed : 0),
+        speed_obd: speed_obd ||0 ,
+        speed_gps: speed_gps || 0,
         latitude,
         longitude,
         timestamp: timestamp ? new Date(timestamp) : new Date(),
