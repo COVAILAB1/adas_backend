@@ -285,6 +285,58 @@ app.post('/api/location', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
+app.delete('/delete_user/:userId',async (req, res) => {
+  const { userId } = req.params;
+
+  // Validate userId
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId is required',
+    });
+  }
+
+  // Start a MongoDB transaction
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    // Delete user from 'users' collection
+    const userDeleteResult = await User.deleteOne({ userId }, { session });
+    if (userDeleteResult.deletedCount === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+      });
+    }
+
+    // Delete related data from other collections
+    await Location.deleteMany({ userId }, { session });
+    await EventLog.deleteMany({ userId }, { session });
+    await SpeedData.deleteMany({ userId }, { session });
+
+    // Commit the transaction
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json({
+      success: true,
+      message: `All data for user ${userId} deleted successfully`,
+    });
+  } catch (error) {
+    // Roll back transaction on error
+    await session.abortTransaction();
+    session.endSession();
+
+    console.error('Error deleting user data:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Server error while deleting user data',
+    });
+  }
+});
 // POST /api/speed endpoint
 app.post('/api/speed', async (req, res) => {
   try {
