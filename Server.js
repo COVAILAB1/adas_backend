@@ -544,6 +544,7 @@ console.log(locations);
       total_distance: loc.total_distance,
       total_drive_time: loc.total_drive_time ? Math.floor(loc.total_drive_time / 1000) : null,
     }));
+    console.log(formattedLocations);
 
     logger.info(
       `[${new Date().toISOString()}] Fetched ${formattedLocations.length} trips, ${event_logs.length} events, and ${trip_count} distinct trips for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`
