@@ -285,7 +285,7 @@ app.post('/api/location', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-app.delete('/delete_user/:userId',async (req, res) => {
+app.delete('api/delete_user/:userId',async (req, res) => {
   const { userId } = req.params;
 
   // Validate userId
