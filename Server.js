@@ -55,9 +55,9 @@ const userSchema = new mongoose.Schema({
   bluetooth_mac: { type: String, required: true },
   created_at: { type: Date, default: Date.now }
 });
-
 const locationSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  trip_id: { type: String, required: true }, // Added trip_id for unique trip identification
   start_location: {
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true }
@@ -70,13 +70,15 @@ const locationSchema = new mongoose.Schema({
     latitude: { type: Number, required: true },
     longitude: { type: Number, required: true }
   }],
-  total_distance: { type: Number, required: true },
-  timestamp: { type: Date, required: true }
+  start_time: { type: Date, required: true }, // Added start_time
+  stop_time: { type: Date, required: false }, // Added stop_time, optional for periodic sends
+  timestamp: { type: Date, required: true },
+  total_distance: { type: Number, required: true }
 });
-
 // Updated event schema - removed speed fields
 const eventSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  trip_id: { type: String, required: true }, // Added trip_id
   event_type: { type: String, required: true },
   event_description: { type: String, required: true },
   timestamp: { type: Date, required: true },
@@ -235,35 +237,54 @@ app.put('/api/update_user', async (req, res) => {
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
-
-// Insert location data
 app.post('/api/location', async (req, res) => {
   try {
-    const { user_id, start_location, end_location, traveled_path, total_distance, timestamp } = req.body;
+    const { user_id, trip_id, start_location, end_location, traveled_path, start_time, stop_time, timestamp, total_distance } = req.body;
+    const logTimestamp = new Date().toISOString();
+    logger.info(`[${logTimestamp}] Processing location data for user_id: ${user_id}, trip_id: ${trip_id}, start_time: ${start_time}, stop_time: ${stop_time}`);
 
-    if (!user_id || !start_location || !end_location || !traveled_path || total_distance == null) {
-      logger.warn('Invalid location data received');
+    if (!user_id || !trip_id || !start_location || !end_location || !traveled_path || !start_time || total_distance == null || !timestamp) {
+      logger.warn(`[${logTimestamp}] Missing required fields for location data: user_id=${user_id}, trip_id=${trip_id}, start_location=${JSON.stringify(start_location)}, end_location=${JSON.stringify(end_location)}, traveled_path=${traveled_path?.length}, start_time=${start_time}, total_distance=${total_distance}, timestamp=${timestamp}`);
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    const location = new Location({
-      user_id,
-      start_location,
-      end_location,
-      traveled_path,
-      total_distance,
-      timestamp: new Date(timestamp)
-    });
+    // Check for an existing document with the same trip_id and no stop_time (active trip)
+    const existingLocation = await Location.findOne({ user_id, trip_id, stop_time: null });
 
-    await location.save();
-    res.status(200).json({ success: true, message: 'Location data saved' });
+    if (existingLocation) {
+      // Update existing document
+      existingLocation.end_location = end_location;
+      existingLocation.traveled_path = traveled_path; // Replace with new cumulative path
+      existingLocation.total_distance = parseFloat(total_distance);
+      existingLocation.timestamp = new Date(timestamp);
+      if (stop_time) {
+        existingLocation.stop_time = new Date(stop_time); // Set stop_time if provided
+      }
+      const updatedLocation = await existingLocation.save();
+      logger.info(`[${logTimestamp}] Updated location data for user_id: ${user_id}, trip_id: ${trip_id}, location_id: ${updatedLocation._id}, traveled_path_length: ${updatedLocation.traveled_path.length}`);
+      return res.status(200).json({ success: true, location_id: updatedLocation._id });
+    } else {
+      // Create new document
+      const location = new Location({
+        user_id,
+        trip_id,
+        start_location,
+        end_location,
+        traveled_path,
+        start_time: new Date(start_time),
+        stop_time: stop_time ? new Date(stop_time) : null,
+        timestamp: new Date(timestamp),
+        total_distance: parseFloat(total_distance)
+      });
+      const savedLocation = await location.save();
+      logger.info(`[${logTimestamp}] Created new location data for user_id: ${user_id}, trip_id: ${trip_id}, location_id: ${savedLocation._id}, traveled_path_length: ${savedLocation.traveled_path.length}`);
+      return res.status(200).json({ success: true, location_id: savedLocation._id });
+    }
   } catch (error) {
-    logger.error('Error saving location data:', error);
+    logger.error(`[${logTimestamp}] Error processing location data for user_id: ${user_id}, trip_id: ${trip_id || 'unknown'}: ${error.message}`);
     res.status(500).json({ success: false, error: 'Server error' });
   }
-
 });
-
 // POST /api/speed endpoint
 app.post('/api/speed', async (req, res) => {
   try {
@@ -313,83 +334,82 @@ app.post('/api/speed', async (req, res) => {
   }
 });
 
-// Updated event logging - removed speed fields
 app.post('/api/log_event', async (req, res) => {
   try {
-    const { user_id, event_type, event_description, timestamp, latitude, longitude } = req.body;
+    const { user_id, trip_id, event_type, event_description, timestamp, latitude, longitude } = req.body;
+    const logTimestamp = new Date().toISOString();
+    logger.info(`[${logTimestamp}] Logging event for user_id: ${user_id}, trip_id: ${trip_id}, event_type: ${event_type}`);
 
-    if (!user_id || !event_type || !event_description || !timestamp) {
-      logger.warn('Invalid event data received');
+    if (!user_id || !trip_id || !event_type || !event_description || !timestamp) {
+      logger.warn(`[${logTimestamp}] Missing required fields for event: user_id=${user_id}, trip_id=${trip_id}, event_type=${event_type}, event_description=${event_description}, timestamp=${timestamp}`);
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
     const event = new Event({
       user_id,
+      trip_id,
       event_type,
       event_description,
       timestamp: new Date(timestamp),
-      latitude: latitude || 0,
-      longitude: longitude || 0
+      latitude: parseFloat(latitude) || 0,
+      longitude: parseFloat(longitude) || 0
     });
 
-    await event.save();
+    const savedEvent = await event.save();
 
     // Driver performance score calculation
     let scoreChange = 0;
     switch (event_type) {
       case 'sudden_acceleration':
-        scoreChange = -5; // Penalty for sudden acceleration
+        scoreChange = -4;
         break;
       case 'sudden_braking':
-        scoreChange = -2; // Penalty for sudden braking
+        scoreChange = -2;
         break;
       case 'speed_limit_violation':
-        scoreChange = -4; // Higher penalty for exceeding speed limit
+        scoreChange = -4;
         break;
       case 'collision_warning':
-        scoreChange = -5; // Severe penalty for potential collision
+        scoreChange = -2;
         break;
       case 'safe_driving':
-        scoreChange = 2; // Reward for safe driving behavior
+        scoreChange = 2;
         break;
       default:
-        scoreChange = 0; // No change for other events
+        scoreChange = 0;
     }
 
     // Update user score with bounds checking
     if (scoreChange !== 0) {
       const user = await User.findById(user_id);
       if (user) {
-        // Calculate new score with bounds checking (0-100)
-        const currentScore = user.score || 50; // Default to 50 if no score exists
+        const currentScore = user.score || 50;
         const newScore = Math.max(0, Math.min(100, currentScore + scoreChange));
-        
         user.score = newScore;
         await user.save();
-        
-        logger.info(`User ${user_id} score updated: ${currentScore} -> ${newScore} (change: ${scoreChange})`);
+        logger.info(`[${logTimestamp}] User ${user_id} score updated: ${currentScore} -> ${newScore} (change: ${scoreChange}) for trip_id: ${trip_id}`);
       } else {
-        logger.warn(`User not found for score update: ${user_id}`);
+        logger.warn(`[${logTimestamp}] User not found for score update: ${user_id}`);
       }
     }
 
+    logger.info(`[${logTimestamp}] Event logged successfully for user_id: ${user_id}, trip_id: ${trip_id}, event_id: ${savedEvent._id}`);
     res.status(200).json({ 
       success: true, 
       message: 'Event logged',
-      event_id: event._id,
+      event_id: savedEvent._id,
       score_change: scoreChange
     });
   } catch (error) {
-    logger.error('Error logging event:', error);
+    logger.error(`[${logTimestamp}] Error logging event for user_id: ${user_id}, trip_id: ${trip_id || 'unknown'}: ${error.message}`);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
 
-// Updated get user details without speed data
 app.get('/api/get_user_details', async (req, res) => {
   try {
-    const { user_id, date } = req.query;
-    console.log(req.query);
+    const { user_id, date, trip_id } = req.query;
+    logger.info(`[${new Date().toISOString()}] Fetching user details for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`);
 
     if (!user_id) {
       logger.warn('Missing user_id in get_user_details');
@@ -407,29 +427,71 @@ app.get('/api/get_user_details', async (req, res) => {
       const startOfDay = new Date(date);
       const endOfDay = new Date(startOfDay);
       endOfDay.setDate(startOfDay.getDate() + 1);
-
-      query.timestamp = {
-        $gte: startOfDay,
-        $lt: endOfDay
-      };
+      query.timestamp = { $gte: startOfDay, $lt: endOfDay };
+    }
+    if (trip_id) {
+      query.trip_id = trip_id;
     }
 
-    const [locations, event_logs] = await Promise.all([
-      Location.find(query).lean(),
-      Event.find(query).lean()
+    const [locations, event_logs, trip_count] = await Promise.all([
+      Location.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: '$trip_id',
+            user_id: { $first: '$user_id' },
+            start_location: { $first: '$start_location' },
+            end_location: { $first: '$end_location' },
+            traveled_path: { $first: '$traveled_path' },
+            start_time: { $first: '$start_time' },
+            stop_time: { $last: '$stop_time' },
+            timestamp: { $first: '$timestamp' },
+            total_distance: { $first: '$total_distance' },
+            total_drive_time: {
+              $max: {
+                $cond: [
+                  { $and: [{ $ne: ['$start_time', null] }, { $ne: ['$stop_time', null] }] },
+                  { $subtract: ['$stop_time', '$start_time'] },
+                  null
+                ]
+              }
+            }
+          }
+        },
+        { $sort: { timestamp: -1 } }
+      ]),
+      Event.find(query).lean(),
+      // Count distinct trips for the date
+      date ? Location.distinct('trip_id', { user_id, timestamp: { $gte: new Date(date), $lt: new Date(new Date(date).setDate(new Date(date).getDate() + 1)) } }).then(trips => trips.length) : Promise.resolve(0)
     ]);
 
+    // Format locations with total_drive_time in seconds
+    const formattedLocations = locations.map(loc => ({
+      trip_id: loc._id,
+      user_id: loc.user_id,
+      start_location: loc.start_location,
+      end_location: loc.end_location,
+      traveled_path: loc.traveled_path,
+      start_time: loc.start_time,
+      stop_time: loc.stop_time,
+      timestamp: loc.timestamp,
+      total_distance: loc.total_distance,
+      total_drive_time: loc.total_drive_time ? Math.floor(loc.total_drive_time / 1000) : null
+    }));
+
+    logger.info(`[${new Date().toISOString()}] Fetched ${formattedLocations.length} trips, ${event_logs.length} events, and ${trip_count} distinct trips for user_id: ${user_id}, date: ${date || 'all'}, trip_id: ${trip_id || 'all'}`);
     res.json({
       success: true,
       user: {
         ...user.toObject(),
         id: user._id,
-        locations: locations,
-        event_logs: event_logs
+        locations: formattedLocations,
+        event_logs,
+        trip_count // Include the number of distinct trips for the date
       }
     });
   } catch (error) {
-    logger.error('Error fetching user details:', error);
+    logger.error(`[${new Date().toISOString()}] Error fetching user details: ${error.message}`);
     res.status(500).json({ success: false, error: 'Server error' });
   }
 });
