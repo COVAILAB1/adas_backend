@@ -321,6 +321,8 @@ app.delete('/api/delete_user/:userId', async (req, res) => {
       });
     }
 
+
+
     // Delete related data from other collections
     // 🔥 FIX: Use the correct field name for related data
     // If your other collections store userId as a string field, keep userId
@@ -377,7 +379,7 @@ app.post('/api/speed', async (req, res) => {
 
     // Process each speed data entry
     const speedEntries = speed_data.map(data => {
-      const { latitude, longitude, speed, speed_obd, speed_gps, speed_source, timestamp } = data;
+      const { latitude, longitude, speed_obd, speed_gps, speed_source, timestamp } = data;
 
       // Validate required fields
       if (latitude == null || longitude == null || speed == null || !speed_source) {
@@ -392,7 +394,6 @@ app.post('/api/speed', async (req, res) => {
         latitude,
         longitude,
         timestamp: timestamp ? new Date(timestamp) : new Date(),
-        speed_source
       };
 
       return speedEntry;
